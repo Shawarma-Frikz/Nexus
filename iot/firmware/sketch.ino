@@ -12,14 +12,14 @@ const char* WIFI_PASSWORD = "";
 
 // NEXUS Backend Telemetry Endpoint
 // In Wokwi simulation, host machine is accessible via host.wokwi.internal or custom IP
-// Multi-Gateway Endpoint Fallback (host.wokwi.internal -> 10.0.2.2 -> LAN IP -> localhost)
+// Gateway fallback. Keep this free of a fixed LAN address so it still works
+// when the computer changes networks.
 const char* SERVER_URLS[] = {
   "http://host.wokwi.internal:8000/api/sensors/batch",
   "http://10.0.2.2:8000/api/sensors/batch",
-  "http://192.168.1.207:8000/api/sensors/batch",
   "http://localhost:8000/api/sensors/batch"
 };
-const int NUM_SERVER_URLS = 4;
+const int NUM_SERVER_URLS = sizeof(SERVER_URLS) / sizeof(SERVER_URLS[0]);
 int active_url_idx = 0;
 
 // Pin Assignments
@@ -88,8 +88,11 @@ void loop() {
     // 1. Read DHT22
     float temperature = dht.readTemperature();
     float humidity = dht.readHumidity();
-    if (isnan(temperature)) temperature = 23.5;
-    if (isnan(humidity)) humidity = 45.0;
+    if (isnan(temperature) || isnan(humidity)) {
+      Serial.println("[NEXUS-ESP32] DHT22 read failed; check GPIO 4 and sensor wiring.");
+      if (isnan(temperature)) temperature = 23.5;
+      if (isnan(humidity)) humidity = 45.0;
+    }
 
     // 2. Read Gas Sensor (Mapped from ADC 0-4095 to 50-1000 ppm)
     int raw_gas = analogRead(PIN_GAS);
@@ -170,18 +173,28 @@ void loop() {
 
     Serial.println("[NEXUS-ESP32] Telemetry packet: " + json_payload);
 
-    // Transmit via HTTP POST
+    // Transmit via HTTP POST, trying the Wokwi/local gateway addresses in turn.
     if (WiFi.status() == WL_CONNECTED) {
-      HTTPClient http;
-      http.begin(SERVER_URL);
-      http.addHeader("Content-Type", "application/json");
-      int http_code = http.POST(json_payload);
-      if (http_code > 0) {
-        Serial.printf("[NEXUS-ESP32] POST Status: %d\n", http_code);
-      } else {
-        Serial.printf("[NEXUS-ESP32] POST Failed: %s\n", http.errorToString(http_code).c_str());
+      bool delivered = false;
+      for (int attempt = 0; attempt < NUM_SERVER_URLS && !delivered; attempt++) {
+        int url_idx = (active_url_idx + attempt) % NUM_SERVER_URLS;
+        HTTPClient http;
+        if (!http.begin(SERVER_URLS[url_idx])) {
+          continue;
+        }
+        http.addHeader("Content-Type", "application/json");
+        int http_code = http.POST(json_payload);
+        if (http_code >= 200 && http_code < 300) {
+          active_url_idx = url_idx;
+          delivered = true;
+          Serial.printf("[NEXUS-ESP32] POST delivered to gateway %d (HTTP %d)\n", url_idx + 1, http_code);
+        } else {
+          Serial.printf("[NEXUS-ESP32] Gateway %d failed (HTTP %d): %s\n", url_idx + 1, http_code,
+                        http_code > 0 ? http.getString().c_str() : http.errorToString(http_code).c_str());
+        }
+        http.end();
       }
-      http.end();
+      if (!delivered) Serial.println("[NEXUS-ESP32] No backend gateway accepted this packet.");
     }
   }
 }

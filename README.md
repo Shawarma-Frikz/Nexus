@@ -177,3 +177,5 @@ Detailed architectural reports are available in the [`docs/`](docs/) directory:
 * [`docs/DEMO.md`](docs/DEMO.md): Presentation guide and script
 * [`docs/DECISIONS.md`](docs/DECISIONS.md): Architectural Decision Records (ADRs)
 * [`docs/ENVIRONMENT_AUDIT.md`](docs/ENVIRONMENT_AUDIT.md): Local environment findings
+#   N e x u s  
+ 

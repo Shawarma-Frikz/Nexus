@@ -1,16 +1,20 @@
 import cv2
 import numpy as np
 import base64
+import json
 import time
 import httpx
 import logging
 import os
 import argparse
 import threading
+import tempfile
 from typing import Dict, Any, List, Tuple, Optional
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [NEXUS-VISION] %(message)s")
 logger = logging.getLogger("nexus.vision")
+CAMERA_MODE_FILE = os.path.join(tempfile.gettempdir(), "nexus-attendance-camera-mode.json")
+CAMERA_MODE_ACK_FILE = os.path.join(tempfile.gettempdir(), "nexus-attendance-camera-mode-ack.json")
 
 class VisionService:
     """
@@ -25,6 +29,7 @@ class VisionService:
         self.cap = None
         self.camera_source = None
         self.camera_available = False
+        self.camera_mode = self.read_camera_mode()
         self.prev_gray = None
         
         # Threading for real-time camera capture & decoupled 45 FPS stream
@@ -52,8 +57,62 @@ class VisionService:
         self.yolo_net = None
         self.face_detector = None
         self._init_models()
-        self._init_camera(camera_source)
+        if self.camera_mode == "surveillance":
+            self._init_camera(camera_source)
+        else:
+            logger.info("Attendance currently owns the webcam; surveillance camera is paused.")
+        self.write_camera_mode_ack()
         self._start_inference_thread()
+
+    def write_camera_mode_ack(self) -> None:
+        try:
+            with open(CAMERA_MODE_ACK_FILE, "w", encoding="utf-8") as ack_file:
+                json.dump({"mode": self.camera_mode, "updated_at": time.time()}, ack_file)
+        except OSError as exc:
+            logger.warning(f"Could not publish camera ownership status: {exc}")
+
+    @staticmethod
+    def read_camera_mode() -> str:
+        """Treat Attendance as the camera owner only while its authenticated page heartbeats."""
+        try:
+            with open(CAMERA_MODE_FILE, "r", encoding="utf-8") as mode_file:
+                value = json.load(mode_file)
+            if value.get("mode") == "attendance" and time.time() - float(value.get("updated_at", 0)) <= 8:
+                return "attendance"
+        except (OSError, ValueError, TypeError):
+            pass
+        return "surveillance"
+
+    def set_camera_mode(self, mode: str) -> None:
+        if mode == self.camera_mode:
+            self.write_camera_mode_ack()
+            return
+        self.camera_mode = mode
+        self.prev_gray = None
+        if mode == "attendance":
+            self.release_camera()
+            logger.info("Attendance owns the webcam; NEXUS surveillance is paused.")
+        else:
+            logger.info("Attendance released the webcam; resuming NEXUS surveillance.")
+            self._init_camera()
+        self.write_camera_mode_ack()
+
+    def release_camera(self) -> None:
+        self.camera_available = False
+        camera = self.cap
+        self.cap = None
+        with self.frame_lock:
+            self.latest_raw_frame = None
+        if camera is not None:
+            try:
+                camera.release()
+            except Exception:
+                pass
+        worker = self.capture_thread
+        if worker and worker.is_alive():
+            worker.join(timeout=0.6)
+        self.capture_thread = None
+        self.camera_source = None
 
     @staticmethod
     def _download_model_if_missing(model_path: str, url: str, model_name: str):
@@ -685,8 +744,15 @@ if __name__ == "__main__":
     print("Press Ctrl+C to stop.")
     try:
         target_interval = args.interval
+        last_mode_check = 0.0
         while True:
             t0 = time.time()
+            if t0 - last_mode_check >= 0.5:
+                service.set_camera_mode(service.read_camera_mode())
+                last_mode_check = t0
+            if service.camera_mode == "attendance":
+                time.sleep(0.1)
+                continue
             service.step()
             elapsed = time.time() - t0
             sleep_time = max(0.001, target_interval - elapsed)

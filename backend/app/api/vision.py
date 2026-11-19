@@ -152,13 +152,20 @@ async def get_latest_vision(
     if not ev:
         return {
             "room_id": room_id,
+            "status": "OFFLINE",
             "event_type": "NO_DETECTION",
             "occupancy": 0,
             "confidence": 1.0,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            "timestamp": None,
+            "metadata": {}
         }
+    latest_timestamp = ev.timestamp
+    if latest_timestamp.tzinfo is None:
+        latest_timestamp = latest_timestamp.replace(tzinfo=datetime.timezone.utc)
+    age_seconds = (datetime.datetime.now(datetime.timezone.utc) - latest_timestamp).total_seconds()
     return {
         "room_id": ev.room_id,
+        "status": "ACTIVE" if age_seconds <= 6 else "STALE",
         "event_type": ev.event_type,
         "confidence": ev.confidence,
         "occupancy": ev.event_metadata.get("occupancy_count", 0) if ev.event_metadata else 0,

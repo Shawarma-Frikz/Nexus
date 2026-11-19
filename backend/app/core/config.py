@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     BACKEND_HOST: str = "0.0.0.0"
     BACKEND_PORT: int = 8000
     FRONTEND_URL: str = "http://localhost:3000"
+
+    # Camera source is passed through to the supervised vision subprocess.
+    # Leave empty to auto-detect a webcam, or set an index/stream URL.
+    VISION_CAMERA_SOURCE: Optional[str] = None
     
     # MQTT Configuration
     MQTT_BROKER_HOST: str = "localhost"

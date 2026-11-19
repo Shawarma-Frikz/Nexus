@@ -17,6 +17,9 @@ MANAGED_SERVICES = [
 
 async def process_watchdog(project_root: str):
     """Resilient supervisor: keeps background IoT, Vision, and Audio services alive."""
+    service_env = os.environ.copy()
+    if settings.VISION_CAMERA_SOURCE:
+        service_env["VISION_CAMERA_SOURCE"] = settings.VISION_CAMERA_SOURCE
     while True:
         await asyncio.sleep(3.0)
         for svc in MANAGED_SERVICES:
@@ -25,7 +28,7 @@ async def process_watchdog(project_root: str):
                 code = proc.returncode if proc else "None"
                 logger.warning(f"[SUPERVISOR] Service '{svc['name']}' not running (exit code: {code}). Restarting...")
                 try:
-                    svc["proc"] = subprocess.Popen(svc["cmd"], cwd=project_root)
+                    svc["proc"] = subprocess.Popen(svc["cmd"], cwd=project_root, env=service_env)
                     logger.info(f"[SUPERVISOR] Spawned '{svc['name']}' (PID {svc['proc'].pid})")
                 except Exception as ex:
                     logger.error(f"[SUPERVISOR] Failed to restart '{svc['name']}': {ex}")
@@ -43,6 +46,7 @@ from backend.app.api.vision import router as vision_router
 from backend.app.api.audio import router as audio_router
 from backend.app.api.ai import router as ai_router
 from backend.app.api.simulation import router as simulation_router
+from backend.app import attendance_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,6 +62,10 @@ async def lifespan(app: FastAPI):
     
     async with AsyncSessionLocal() as session:
         await seed_initial_data(session)
+
+    # Attendance is a classroom module inside the main NEXUS backend. Its own
+    # startup hook is called explicitly because mounted ASGI apps do not run it.
+    await attendance_service.startup()
     
     logger.info("[NEXUS] Systems initialized. Listening for real-time telemetry.")
 
@@ -65,9 +73,12 @@ async def lifespan(app: FastAPI):
     watchdog_task = None
     if os.environ.get("TESTING") != "1":
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+        service_env = os.environ.copy()
+        if settings.VISION_CAMERA_SOURCE:
+            service_env["VISION_CAMERA_SOURCE"] = settings.VISION_CAMERA_SOURCE
         for svc in MANAGED_SERVICES:
             try:
-                svc["proc"] = subprocess.Popen(svc["cmd"], cwd=project_root)
+                svc["proc"] = subprocess.Popen(svc["cmd"], cwd=project_root, env=service_env)
                 logger.info(f"[NEXUS] Started '{svc['name']}' (PID {svc['proc'].pid})")
             except Exception as e:
                 logger.error(f"[NEXUS] Could not start '{svc['name']}': {e}")
@@ -85,6 +96,7 @@ async def lifespan(app: FastAPI):
                 p.terminate()
             except Exception:
                 pass
+    await attendance_service.engine.dispose()
     await engine.dispose()
 
 app = FastAPI(
@@ -104,6 +116,7 @@ app.add_middleware(
 )
 
 # Register Routers
+app.mount("/attendance-api", attendance_service.app)
 app.include_router(health_router, prefix="/api", tags=["Health"])
 app.include_router(rooms_router, prefix="/api/rooms", tags=["Rooms"])
 app.include_router(sensors_router, prefix="/api/sensors", tags=["Sensors"])

@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import {
   ShieldAlert, Eye, Mic, RotateCcw, Flame, Wind, Thermometer,
   ArrowUpRight, Send, FileText, Sliders, Play, Volume2,
   BellRing, ExternalLink, Sparkles, Maximize2, X,
-  ShieldCheck, Sun, Moon, Building2, MessageSquare, CheckCircle2
+  ShieldCheck, Sun, Moon, Building2, MessageSquare, CheckCircle2, CalendarCheck2
 } from 'lucide-react';
 import Building3D, {
   RoomState,
@@ -51,6 +52,12 @@ interface RoomTelemetry {
   tempHistory: number[];
   gasHistory: number[];
   smokeHistory: number[];
+}
+
+interface VisionFeedStatus {
+  status: 'ACTIVE' | 'STALE' | 'OFFLINE';
+  source: string | null;
+  timestamp: string | null;
 }
 
 const DEFAULT_ROOM_TELEMETRY: Record<string, RoomTelemetry> = {
@@ -109,6 +116,8 @@ export default function OperationsCenter() {
   const [predictionVariable, setPredictionVariable] = useState<'temperature' | 'gas' | 'humidity'>('temperature');
   const [prediction, setPrediction] = useState<any>(null);
   const [visionSnapshot, setVisionSnapshot] = useState<string | null>(null);
+  const [visionFeedStatus, setVisionFeedStatus] = useState<VisionFeedStatus>({ status: 'OFFLINE', source: null, timestamp: null });
+  const [cameraStreamFailed, setCameraStreamFailed] = useState<boolean>(false);
 
   const [forensicExplanation, setForensicExplanation] = useState<string | null>(null);
   const [explainingIncidentId, setExplainingIncidentId] = useState<string | null>(null);
@@ -222,11 +231,11 @@ export default function OperationsCenter() {
               tempHistory: [], gasHistory: [], smokeHistory: []
             };
             const r = sData.readings;
-            const newT = r.temperature ? r.temperature.value : cur.temperature;
-            const newG = r.gas ? r.gas.value : cur.gas;
-            const newS = r.smoke ? r.smoke.value : (cur.smoke ?? 0.3);
-            const newV = r.vibration ? r.vibration.value : cur.vibration;
-            const newH = r.humidity ? r.humidity.value : cur.humidity;
+            const newT = r.temperature?.value ?? cur.temperature;
+            const newG = r.gas?.value ?? cur.gas;
+            const newS = r.smoke?.value ?? (cur.smoke ?? 0.3);
+            const newV = r.vibration?.value ?? cur.vibration;
+            const newH = r.humidity?.value ?? cur.humidity;
             const newOcc = latestOccupancy !== undefined ? latestOccupancy : cur.occupancy;
             return {
               ...prev,
@@ -255,6 +264,43 @@ export default function OperationsCenter() {
     loadInitialData();
   }, [selectedRoomId, predictionVariable]);
 
+  // Report whether frames are actually reaching the backend, and whether they
+  // come from a physical camera or the explicit synthetic fallback.
+  useEffect(() => {
+    let cancelled = false;
+    const refreshVisionStatus = async () => {
+      try {
+        const response = await fetch(`http://127.0.0.1:8000/api/vision/latest/${selectedRoomId}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Vision status returned ${response.status}`);
+        const data = await response.json();
+        if (!cancelled) {
+          setVisionFeedStatus({
+            status: data.status === 'ACTIVE' ? 'ACTIVE' : data.status === 'STALE' ? 'STALE' : 'OFFLINE',
+            source: data.metadata?.source || null,
+            timestamp: data.timestamp || null
+          });
+          if (typeof data.occupancy === 'number') {
+            setAllTelemetry((prev) => {
+              const current = prev[selectedRoomId] || DEFAULT_ROOM_TELEMETRY[selectedRoomId] || {
+                temperature: 22, humidity: 45, gas: 80, smoke: 0.3, occupancy: 0, vibration: 0.025,
+                tempHistory: [], gasHistory: [], smokeHistory: []
+              };
+              return { ...prev, [selectedRoomId]: { ...current, occupancy: data.occupancy } };
+            });
+          }
+        }
+      } catch {
+        if (!cancelled) setVisionFeedStatus({ status: 'OFFLINE', source: null, timestamp: null });
+      }
+    };
+    refreshVisionStatus();
+    const timer = window.setInterval(refreshVisionStatus, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [selectedRoomId]);
+
   // WebSocket connection
   useEffect(() => {
     let ws: WebSocket;
@@ -275,6 +321,7 @@ export default function OperationsCenter() {
                 tempHistory: [], gasHistory: [], smokeHistory: []
               };
               let t = cur.temperature;
+              let h = cur.humidity;
               let g = cur.gas;
               let s = cur.smoke ?? 0.3;
               let v = cur.vibration;
@@ -282,12 +329,14 @@ export default function OperationsCenter() {
 
               if (data.type === 'SENSOR_READING') {
                 if (data.sensor_type === 'temperature') t = data.value;
+                if (data.sensor_type === 'humidity') h = data.value;
                 if (data.sensor_type === 'gas') g = data.value;
                 if (data.sensor_type === 'smoke') s = data.value;
                 if (data.sensor_type === 'vibration') v = data.value;
               } else if (data.type === 'SENSOR_BATCH') {
                 data.readings.forEach((r: any) => {
                   if (r.sensor_type === 'temperature') t = r.value;
+                  if (r.sensor_type === 'humidity') h = r.value;
                   if (r.sensor_type === 'gas') g = r.value;
                   if (r.sensor_type === 'smoke') s = r.value;
                   if (r.sensor_type === 'vibration') v = r.value;
@@ -304,6 +353,7 @@ export default function OperationsCenter() {
                 [roomTarget]: {
                   ...cur,
                   temperature: t,
+                  humidity: h,
                   gas: g,
                   smoke: s,
                   vibration: v,
@@ -680,6 +730,15 @@ export default function OperationsCenter() {
 
           {/* Right: Connection Status, Theme Switcher & Reset */}
           <div className="flex items-center gap-2.5">
+            {selectedRoomObj?.type === 'classroom' && (
+              <Link
+                href={`/attendance?room=${encodeURIComponent(selectedRoomObj.id)}`}
+                className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white flex items-center gap-1.5 transition shadow-sm"
+              >
+                <CalendarCheck2 className="h-3.5 w-3.5" />
+                <span>Class attendance</span>
+              </Link>
+            )}
             <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-color)] text-xs text-[var(--text-secondary)]">
               <span className={`h-2 w-2 rounded-full ${wsConnected || firebaseConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
               <span>{wsConnected ? 'Live Stream Connected' : firebaseConnected ? 'Cloud Synced' : 'Connecting...'}</span>
@@ -1013,24 +1072,25 @@ export default function OperationsCenter() {
               </div>
 
               {/* Card 5: People In Front & Live Camera (Click to open camera modal) */}
-              <div
-                onClick={() => setSnapshotModalOpen(true)}
-                className="studio-card p-4 flex flex-col justify-between cursor-pointer group hover:border-emerald-500/60 hover:shadow-lg transition-all"
-                title="Click to open 45 FPS Edge Camera Feed"
+              <button
+                type="button"
+                onClick={() => { setCameraStreamFailed(false); setSnapshotModalOpen(true); }}
+                className="studio-card w-full p-4 flex flex-col justify-between text-left cursor-pointer group hover:border-emerald-500/60 hover:shadow-lg transition-all"
+                title="Open the room camera feed"
               >
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-medium text-[var(--text-secondary)] flex items-center gap-1.5">
-                    <Eye className="h-4 w-4 text-emerald-500 group-hover:scale-110 transition-transform" />
-                    People In Front
+                    <Eye className={`h-4 w-4 group-hover:scale-110 transition-transform ${visionFeedStatus.status === 'ACTIVE' ? 'text-emerald-500' : 'text-amber-500'}`} />
+                    Camera & Occupancy
                   </span>
                   <span
                     className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                      occupancy > 0
+                      visionFeedStatus.status === 'ACTIVE'
                         ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold'
-                        : 'bg-slate-500/10 text-slate-500'
+                        : 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
                     }`}
                   >
-                    {occupancy > 0 ? 'OCCUPIED' : 'ZONE CLEAR'}
+                    {visionFeedStatus.status === 'ACTIVE' ? 'FEED ACTIVE' : visionFeedStatus.status === 'STALE' ? 'FEED STALE' : 'FEED OFFLINE'}
                   </span>
                 </div>
 
@@ -1038,24 +1098,30 @@ export default function OperationsCenter() {
                   <div className="text-3xl font-display font-extrabold text-[var(--text-primary)] tnum tracking-tight flex items-baseline gap-1.5">
                     {occupancy}
                     <span className="text-xs font-normal text-[var(--text-muted)]">
-                      {occupancy === 1 ? 'person in front' : 'people in front'}
+                      {occupancy === 1 ? 'person detected' : 'people detected'}
                     </span>
                   </div>
                   <p className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">
-                    {occupancy > 0 ? 'Human subject identified in camera view' : 'No subjects detected in zone'}
+                    {visionFeedStatus.source === 'synthetic_generator'
+                      ? 'Synthetic preview — physical camera not detected'
+                      : visionFeedStatus.source?.startsWith('camera_source_')
+                      ? `Physical camera active (${visionFeedStatus.source.replace('camera_source_', 'device ')})`
+                      : visionFeedStatus.status === 'ACTIVE'
+                      ? (occupancy > 0 ? 'Person detected in the room' : 'No person currently detected')
+                      : 'Waiting for a fresh camera frame'}
                   </p>
                 </div>
 
-                <div className="pt-2 border-t border-[var(--border-color)] mt-1 flex items-center justify-between text-xs text-emerald-600 dark:text-emerald-400 font-medium group-hover:text-emerald-500">
-                  <span className="flex items-center gap-1 text-[11px]">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping"></span>
-                    45 FPS Live Feed
+                <div className="pt-2 border-t border-[var(--border-color)] mt-1 flex items-center justify-between text-xs font-medium group-hover:text-emerald-500">
+                  <span className={`flex items-center gap-1 text-[11px] ${visionFeedStatus.status === 'ACTIVE' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${visionFeedStatus.status === 'ACTIVE' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
+                    {visionFeedStatus.status === 'ACTIVE' ? 'Security monitoring active' : visionFeedStatus.status === 'STALE' ? 'No recent camera frames' : 'Camera service unavailable'}
                   </span>
                   <span className="flex items-center gap-1 text-[11px] text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]">
                     <Maximize2 className="h-3 w-3" /> Open Camera
                   </span>
                 </div>
-              </div>
+              </button>
             </div>
           </div>
 
@@ -1459,7 +1525,7 @@ export default function OperationsCenter() {
             <div className="flex items-center justify-between">
               <h3 className="font-display font-bold text-base text-[var(--text-primary)] flex items-center gap-2">
                 <Eye className="h-5 w-5 text-emerald-500" />
-                Live Camera — {selectedRoomObj?.name} (45 FPS)
+                Live Camera — {selectedRoomObj?.name}
               </h3>
               <button
                 type="button"
@@ -1471,22 +1537,40 @@ export default function OperationsCenter() {
             </div>
 
             <div className="rounded-xl overflow-hidden bg-black flex items-center justify-center min-h-[340px]">
-              <img
-                src={`http://127.0.0.1:8000/api/vision/stream/${selectedRoomId}`}
-                alt="Live Camera Stream"
-                className="w-full h-auto object-contain"
-                onError={(e) => {
-                  if (visionSnapshot) {
-                    (e.currentTarget as HTMLImageElement).src = visionSnapshot.startsWith('data:image')
-                      ? visionSnapshot
-                      : `data:image/jpeg;base64,${visionSnapshot}`;
-                  }
-                }}
-              />
+              {cameraStreamFailed && !visionSnapshot ? (
+                <div className="max-w-md px-6 text-center text-white">
+                  <Eye className="h-8 w-8 mx-auto mb-3 text-amber-400" />
+                  <p className="font-semibold">No camera frames are reaching NEXUS</p>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-300">
+                    The vision service may not have started, or the camera could not be opened. Restart NEXUS and check the backend window for the vision-service startup message.
+                  </p>
+                </div>
+              ) : (
+                <img
+                  src={`http://127.0.0.1:8000/api/vision/stream/${selectedRoomId}`}
+                  alt="Live Camera Stream"
+                  className="w-full h-auto object-contain"
+                  onLoad={() => setCameraStreamFailed(false)}
+                  onError={(e) => {
+                    if (visionSnapshot) {
+                      (e.currentTarget as HTMLImageElement).src = visionSnapshot.startsWith('data:image')
+                        ? visionSnapshot
+                        : `data:image/jpeg;base64,${visionSnapshot}`;
+                    } else {
+                      setCameraStreamFailed(true);
+                    }
+                  }}
+                />
+              )}
             </div>
 
             <div className="flex justify-between items-center text-xs text-[var(--text-secondary)]">
-              <span>Detected in room: <strong>{occupancy} {occupancy === 1 ? 'Person' : 'People'}</strong></span>
+              <span>
+                {visionFeedStatus.status === 'ACTIVE'
+                  ? (visionFeedStatus.source === 'synthetic_generator' ? 'Synthetic camera preview' : 'Physical camera feed active')
+                  : visionFeedStatus.status === 'STALE' ? 'Camera feed is stale' : 'Camera feed is offline'}
+                {' · '}Detected: <strong>{occupancy} {occupancy === 1 ? 'person' : 'people'}</strong>
+              </span>
               <button
                 type="button"
                 onClick={() => setSnapshotModalOpen(false)}

@@ -1,0 +1,10 @@
+export type Student = { id:string; student_code:string; first_name:string; surname:string; class_name:string; email?:string|null; created_at?:string; sample_count:number; credentials_email_sent?:boolean; enrolled:boolean; views:string[]; pose_views?:string[]; profile_photo_available?:boolean; attendance?:string; marked_at?:string|null; source?:string|null; similarity?:number|null };
+export type Correction = { id:string; student_id:string; student_code:string; first_name:string; surname:string; claimed_status:string; note:string; status:string; created_at:string };
+export type AttendanceReview = { id:string; student_id:string; student_code:string; first_name:string; surname:string; previous_status:string; new_status:string; reason:string; actor:string; created_at:string };
+export type AttendanceAuditEvent = AttendanceReview;
+export type SessionHistoryItem = {id:string;class_name:string;started_at:string;status:string;late_after_seconds:number;absent_after_seconds:number};
+export type SessionView = { id:string; class_name:string; started_at:string; elapsed_seconds:number; late_after_seconds:number; absent_after_seconds:number; status:string; scanner_should_run:boolean; students:Student[]; requests:Correction[]; reviews:AttendanceReview[]; audit_log:AttendanceAuditEvent[] };
+export function apiBase(){ return '/attendance-api'; }
+export async function api<T=any>(path:string, options:RequestInit={}):Promise<T>{const response=await fetch(`${apiBase()}${path}`,{...options,credentials:'include',headers:{'Content-Type':'application/json',...(options.headers||{})},cache:'no-store'});const body=await response.json().catch(()=>({detail:'The attendance server did not return JSON'}));if(!response.ok)throw new Error(body.detail||`Request failed (${response.status})`);return body as T;}
+export const json=(body:unknown):RequestInit=>({method:'POST',body:JSON.stringify(body)});
+export function timeLabel(value?:string|null){return value?new Date(value).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';}

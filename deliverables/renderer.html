@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NEXUS 3D Video Renderer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; }
+    canvas { width: 1920px; height: 1080px; display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="c" width="1920" height="1080"></canvas>
+
+  <script type="module">
+    import * as THREE from './three.module.min.js';
+
+    const canvas = document.getElementById('c');
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      powerPreference: 'high-performance'
+    });
+    renderer.setSize(1920, 1080, false);
+    renderer.setPixelRatio(1);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0xd0dce4, 42, 180);
+
+    // Procedural Sky
+    function createSkyTexture() {
+      const c = document.createElement('canvas');
+      c.width = 1024; c.height = 512;
+      const ctx = c.getContext('2d');
+      const grad = ctx.createLinearGradient(0, 0, 0, 512);
+      grad.addColorStop(0, '#10283e');
+      grad.addColorStop(0.38, '#588bab');
+      grad.addColorStop(0.55, '#f5d6b4');
+      grad.addColorStop(0.68, '#dce8e0');
+      grad.addColorStop(1, '#709084');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 1024, 512);
+      const sun = ctx.createRadialGradient(260, 280, 8, 260, 280, 150);
+      sun.addColorStop(0, 'rgba(255, 246, 220, 0.95)');
+      sun.addColorStop(1, 'rgba(255, 246, 220, 0)');
+      ctx.fillStyle = sun;
+      ctx.fillRect(0, 0, 1024, 512);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      return tex;
+    }
+
+    const sky = createSkyTexture();
+    scene.background = sky;
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromEquirectangular(sky).texture;
+    pmrem.dispose();
+
+    // Procedural Sign Textures
+    function createWallBoardTexture(title, subtitle, accent = '#4bd6c0') {
+      const c = document.createElement('canvas');
+      c.width = 1024; c.height = 300;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#0e1d2c';
+      ctx.fillRect(0, 0, 1024, 300);
+
+      // Clean architectural trim
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(6, 6, 1012, 288);
+
+      // Accent pill dot
+      ctx.fillStyle = accent;
+      ctx.beginPath();
+      ctx.arc(48, 54, 9, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Title
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 52px "Segoe UI", Arial, sans-serif';
+      ctx.fillText(title, 76, 70);
+
+      // Subtitle
+      ctx.fillStyle = '#a6c2d8';
+      ctx.font = '600 28px "Segoe UI", Arial, sans-serif';
+      ctx.fillText(subtitle, 76, 125);
+
+      // Minimalist metric dividers
+      ctx.strokeStyle = 'rgba(75, 214, 192, 0.25)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(76, 160);
+      ctx.lineTo(940, 160);
+      ctx.stroke();
+
+      // Clean readouts
+      ctx.fillStyle = '#8ea7bc';
+      ctx.font = '20px "Segoe UI", Arial, sans-serif';
+      ctx.fillText('STATUS: CONTINUOUS MONITORING · OPTIMAL', 76, 210);
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    function createWoodTexture() {
+      const c = document.createElement('canvas');
+      c.width = 512; c.height = 512;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#b38255';
+      ctx.fillRect(0, 0, 512, 512);
+      for (let i = 0; i < 16; i++) {
+        const y = i * 32;
+        ctx.fillStyle = i % 2 === 0 ? '#bc8b5c' : '#aa794d';
+        ctx.fillRect(0, y, 512, 32);
+        ctx.fillStyle = 'rgba(60, 40, 20, 0.35)';
+        ctx.fillRect(0, y + 30.5, 512, 1.5);
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    function createLabTileTexture() {
+      const c = document.createElement('canvas');
+      c.width = 512; c.height = 512;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#dbe3e8';
+      ctx.fillRect(0, 0, 512, 512);
+      ctx.strokeStyle = '#b0c0cc';
+      ctx.lineWidth = 2;
+      for (let x = 0; x <= 512; x += 64) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 512); ctx.stroke();
+      }
+      for (let y = 0; y <= 512; y += 64) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(512, y); ctx.stroke();
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    // Materials
+    const woodMat = new THREE.MeshStandardMaterial({ map: createWoodTexture(), roughness: 0.6, metalness: 0.05 });
+    const labTileMat = new THREE.MeshStandardMaterial({ map: createLabTileTexture(), roughness: 0.45, metalness: 0.08 });
+    const concreteLight = new THREE.MeshStandardMaterial({ color: 0xdce2e8, roughness: 0.7 });
+    const concreteDark = new THREE.MeshStandardMaterial({ color: 0x768795, roughness: 0.72 });
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x1b2838, roughness: 0.4, metalness: 0.3 }); // Navy/charcoal
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8eef2, roughness: 0.8 });
+    const epoxyBlack = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.3, metalness: 0.15 });
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: 0x9ec7eb,
+      roughness: 0.05,
+      metalness: 0.25,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+    });
+
+    function box(parent, mat, x, y, z, w, h, d) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    }
+
+    function cyl(parent, mat, x, y, z, rt, rb, h, seg = 16) {
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    }
+
+    // 1. Campus Grounds & Site
+    box(scene, new THREE.MeshStandardMaterial({ color: 0x547963, roughness: 0.9 }), 0, -0.55, 0, 110, 0.4, 98); // Grass
+    box(scene, new THREE.MeshStandardMaterial({ color: 0x2c3540, roughness: 0.85 }), 0, -0.32, 28, 110, 0.12, 16); // Road
+    box(scene, concreteLight, 0, -0.22, 12.0, 36, 0.16, 7.2); // Pedestrian entrance plaza
+
+    // Surrounding Campus Blocks
+    box(scene, concreteDark, -36, 6.2, -7, 19, 12.4, 19);
+    box(scene, concreteDark, 37, 5.2, -9, 18, 10.4, 21);
+
+    // Trees
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x594230, roughness: 0.85 });
+    const leavesMat = new THREE.MeshStandardMaterial({ color: 0x336d50, roughness: 0.85 });
+    [[-28, -2], [-22, 20], [-10, 21], [18, 21], [29, 6], [28, -21], [-23, -21]].forEach(([tx, tz]) => {
+      box(scene, trunkMat, tx, 1.7, tz, 0.46, 3.4, 0.46);
+      const c = new THREE.Mesh(new THREE.SphereGeometry(2.4, 12, 10), leavesMat);
+      c.position.set(tx, 4.3, tz);
+      c.scale.set(1.05, 1.25, 1.05);
+      c.castShadow = true;
+      scene.add(c);
+    });
+
+    // 2. NEXUS Facility Structure
+    const building = new THREE.Group();
+    building.position.set(0, 0, -1.5);
+    scene.add(building);
+
+    box(building, concreteDark, 0, 0.05, 0, 27, 0.55, 17.5);
+    box(building, concreteDark, 0, 14.3, 0, 26.5, 0.45, 17.2);
+    box(building, wallMat, 0, 7.1, -7.7, 25.5, 14.1, 0.65); // Rear
+    box(building, wallMat, -12.2, 7.1, 0, 0.65, 14.1, 15.6); // Left flank
+    box(building, wallMat, 12.2, 7.1, 0, 0.65, 14.1, 15.6); // Right flank
+
+    // Floors & Facade
+    for (let lvl = 0; lvl < 3; lvl++) {
+      const y = 0.55 + lvl * 4.45;
+      if (lvl === 0) {
+        box(building, concreteLight, 0, y, 0, 24.8, 0.28, 15.4);
+      } else {
+        box(building, lvl === 1 ? labTileMat : woodMat, -5.5, y, 0, 13.4, 0.28, 15.4);
+        box(building, lvl === 1 ? labTileMat : woodMat, 8.2, y, 0, 8.4, 0.28, 15.4);
+        box(building, concreteLight, 0, y, 6.0, 24.8, 0.28, 3.4);
+        box(building, concreteLight, 0, y, -4.8, 24.8, 0.28, 5.8);
+      }
+
+      box(building, concreteDark, 0, y + 0.18, 7.15, 24.8, 0.18, 0.32);
+      for (let col = 0; col < 8; col++) {
+        const cx = -10.5 + col * 3.0;
+        if (lvl === 0 && Math.abs(cx) < 3.2) continue; // Entrance opening
+        box(building, frameMat, cx, y + 2.35, 7.18, 0.14, 3.9, 0.3);
+        box(building, glassMat, cx + 1.45, y + 2.35, 7.22, 2.75, 3.7, 0.08);
+      }
+    }
+
+    // VISIBLY OPEN ENTRANCE DOORWAY (Portal Frame with Doors Pivoted Open)
+    box(building, concreteDark, -2.4, 1.8, 7.42, 0.35, 3.6, 0.45);
+    box(building, concreteDark, 2.4, 1.8, 7.42, 0.35, 3.6, 0.45);
+    box(building, concreteDark, 0, 3.6, 7.42, 5.15, 0.42, 0.5);
+
+    // Open Glass Doors (Pivoted 85 degrees outward)
+    const doorL = new THREE.Group();
+    doorL.position.set(-2.2, 0, 7.25);
+    doorL.rotation.y = -1.45;
+    box(doorL, glassMat, 0.7, 1.7, 0, 1.4, 3.2, 0.08);
+    box(doorL, frameMat, 0.7, 1.7, 0.06, 0.08, 3.25, 0.08);
+    building.add(doorL);
+
+    const doorR = new THREE.Group();
+    doorR.position.set(2.2, 0, 7.25);
+    doorR.rotation.y = 1.45;
+    box(doorR, glassMat, -0.7, 1.7, 0, 1.4, 3.2, 0.08);
+    box(doorR, frameMat, -0.7, 1.7, 0.06, 0.08, 3.25, 0.08);
+    building.add(doorR);
+
+    // Floating Staircase (Connecting Level 1 -> 2 -> 3)
+    for (let flight = 0; flight < 2; flight++) {
+      const baseY = 0.72 + flight * 4.45;
+      for (let s = 0; s < 11; s++) {
+        const stepZ = 3.4 - s * 0.48;
+        const stepY = baseY + s * 0.37;
+        box(building, woodMat, 2.55, stepY, stepZ, 2.2, 0.08, 0.52);
+        box(building, frameMat, 2.55, stepY - 0.06, stepZ, 0.4, 0.06, 0.48);
+      }
+      box(building, glassMat, 1.45, baseY + 2.2, 0.9, 0.04, 0.95, 5.2);
+      box(building, frameMat, 1.45, baseY + 2.7, 0.9, 0.06, 0.06, 5.2);
+    }
+
+    // 3. CHEMISTRY LAB 02 (Floor 2, Left Wing)
+    const labFloor = 4.73;
+
+    // Corridor & Open Doorway into Lab (Opening from z=1.2 to z=3.4)
+    box(building, wallMat, -5.6, labFloor + 1.8, 4.6, 0.22, 3.6, 2.4);
+    box(building, wallMat, -5.6, labFloor + 1.8, -1.5, 0.22, 3.6, 5.4);
+    box(building, wallMat, -5.6, labFloor + 3.2, 2.3, 0.22, 0.8, 2.2); // Doorway lintel
+
+    // Legible Wall Display: "CHEMISTRY LAB 02" & "TEMPERATURE · AIR · SAFETY"
+    const labSignTex = createWallBoardTexture('CHEMISTRY LAB 02', 'TEMPERATURE · AIR · SAFETY', '#4de0c7');
+    const labSign = new THREE.Mesh(new THREE.PlaneGeometry(5.8, 1.7), new THREE.MeshBasicMaterial({ map: labSignTex, side: THREE.DoubleSide }));
+    labSign.position.set(-8.8, labFloor + 2.65, -4.95);
+    building.add(labSign);
+
+    // Subtle Environmental Sensor Pod
+    const podMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.3 });
+    const podGlow = new THREE.MeshBasicMaterial({ color: 0x4de0c7 });
+    box(building, podMat, -5.9, labFloor + 2.3, -4.95, 0.25, 0.35, 0.12);
+    cyl(building, podGlow, -5.9, labFloor + 2.3, -4.88, 0.04, 0.04, 0.03);
+
+    // Furnished Lab Islands (Carefully positioned to frame the board)
+    [-9.6, -7.2].forEach((ix) => {
+      box(building, epoxyBlack, ix, labFloor + 0.88, 0.8, 2.0, 0.08, 1.3);
+      box(building, new THREE.MeshStandardMaterial({ color: 0xe2e8f0 }), ix, labFloor + 0.42, 0.8, 1.9, 0.84, 1.2);
+      // Reagent shelf with glass bottles
+      cyl(building, frameMat, ix - 0.7, labFloor + 1.15, 0.8, 0.02, 0.02, 0.5);
+      cyl(building, frameMat, ix + 0.7, labFloor + 1.15, 0.8, 0.02, 0.02, 0.5);
+      box(building, epoxyBlack, ix, labFloor + 1.15, 0.8, 1.5, 0.03, 0.28);
+      // Glassware
+      cyl(building, glassMat, ix + 0.3, labFloor + 1.05, 1.05, 0.04, 0.09, 0.24); // Flask
+      cyl(building, glassMat, ix + 0.55, labFloor + 1.01, 1.02, 0.06, 0.06, 0.18); // Beaker
+      // Stools
+      [-0.35, 0.35].forEach((dx) => {
+        cyl(building, frameMat, ix + dx, labFloor + 0.32, 1.75, 0.025, 0.025, 0.6);
+        cyl(building, new THREE.MeshStandardMaterial({ color: 0x1e293b }), ix + dx, labFloor + 0.62, 1.75, 0.18, 0.18, 0.06);
+      });
+    });
+
+    // Walk-in Fume Hood along the LEFT flank wall (completely out of the sign's sightline)
+    box(building, new THREE.MeshStandardMaterial({ color: 0xdde3ea }), -11.4, labFloor + 1.8, -1.0, 1.2, 2.8, 2.4);
+    box(building, glassMat, -10.82, labFloor + 1.75, -1.0, 0.04, 1.1, 2.1);
+
+    // 4. CLASSROOM 01 (Floor 3, Right Wing)
+    const classFloor = 9.18;
+
+    // Corridor & Open Doorway into Classroom (Opening from z=1.2 to z=3.4)
+    box(building, wallMat, 5.6, classFloor + 1.8, 4.6, 0.22, 3.6, 2.4);
+    box(building, wallMat, 5.6, classFloor + 1.8, -1.5, 0.22, 3.6, 5.4);
+    box(building, wallMat, 5.6, classFloor + 3.2, 2.3, 0.22, 0.8, 2.2); // Lintel
+
+    // Legible Wall Presentation Board: "CLASSROOM 01" & "CLASS SESSION · ATTENDANCE"
+    const classSignTex = createWallBoardTexture('CLASSROOM 01', 'CLASS SESSION · ATTENDANCE', '#60a5fa');
+    const classSign = new THREE.Mesh(new THREE.PlaneGeometry(5.8, 1.7), new THREE.MeshBasicMaterial({ map: classSignTex, side: THREE.DoubleSide }));
+    classSign.position.set(8.8, classFloor + 2.55, -4.95);
+    building.add(classSign);
+
+    // Teacher's Area & Modern Podium
+    box(building, new THREE.MeshStandardMaterial({ color: 0x334155 }), 7.4, classFloor + 0.65, -3.2, 1.1, 1.1, 0.65);
+    box(building, woodMat, 7.4, classFloor + 1.22, -3.2, 1.15, 0.06, 0.7);
+
+    // Furnished Student Workstations & Chairs
+    const deskMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 });
+    const laptopMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.6, roughness: 0.3 });
+    const screenGlow = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+
+    [[7.8, -1.4], [10.2, -1.4], [7.8, 0.5], [10.2, 0.5], [7.8, 2.3], [10.2, 2.3]].forEach(([dx, dz]) => {
+      // Table
+      box(building, woodMat, dx, classFloor + 0.74, dz, 1.6, 0.06, 0.75);
+      box(building, deskMat, dx - 0.7, classFloor + 0.37, dz, 0.05, 0.7, 0.68);
+      box(building, deskMat, dx + 0.7, classFloor + 0.37, dz, 0.05, 0.7, 0.68);
+      // Ergonomic Chair
+      box(building, deskMat, dx, classFloor + 0.46, dz + 0.55, 0.45, 0.08, 0.42);
+      box(building, deskMat, dx, classFloor + 0.76, dz + 0.74, 0.42, 0.48, 0.05);
+      cyl(building, frameMat, dx, classFloor + 0.23, dz + 0.55, 0.03, 0.03, 0.4);
+      // Laptop
+      box(building, laptopMat, dx - 0.15, classFloor + 0.78, dz - 0.05, 0.36, 0.015, 0.25);
+      const lid = box(building, laptopMat, dx - 0.15, classFloor + 0.89, dz - 0.16, 0.36, 0.22, 0.015);
+      lid.rotation.x = -0.22;
+      const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.33, 0.19), screenGlow);
+      scr.position.set(dx - 0.15, classFloor + 0.89, dz - 0.15);
+      scr.rotation.x = -0.22;
+      building.add(scr);
+    });
+
+    // Lighting (Soft architectural daylight with soft interior accents)
+    scene.add(new THREE.HemisphereLight(0xe4eff8, 0x334454, 1.25));
+    const sun = new THREE.DirectionalLight(0xfffaee, 2.6);
+    sun.position.set(-46, 52, 28);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.bias = -0.00012;
+    sun.shadow.normalBias = 0.025;
+    scene.add(sun);
+
+    const fill = new THREE.DirectionalLight(0x9bc2e8, 0.6);
+    fill.position.set(28, 20, -22);
+    scene.add(fill);
+
+    const labLight = new THREE.PointLight(0x5eead4, 16, 16, 2);
+    labLight.position.set(-7.8, labFloor + 3.2, 0);
+    scene.add(labLight);
+
+    const classLight = new THREE.PointLight(0xffdfb8, 14, 14, 2);
+    classLight.position.set(8.2, classFloor + 3.2, 0);
+    scene.add(classLight);
+
+    // 5. CAMERA PATH - STRICTLY THROUGH OPENINGS, NO WALL CLIPPING, STEADY PACING
+    // 900 Frames @ 30 FPS = 30 seconds
+    const camPoints = [
+      new THREE.Vector3(48, 64, 72),      // 0.0s: Aerial view establishing campus & facility
+      new THREE.Vector3(34, 46, 56),      // 3.5s: Descending toward facility
+      new THREE.Vector3(16, 24, 38),      // 6.5s: Approach ground plaza
+      new THREE.Vector3(2.5, 7.5, 22),    // 8.5s: Ground approach, facing open entrance
+      new THREE.Vector3(0, 2.4, 10.2),    // 9.5s: Directly aligned with open entrance portal
+      new THREE.Vector3(0, 2.2, 6.2),     // 10.8s: Passing through open doors into lobby
+      new THREE.Vector3(0, 2.4, 2.2),     // 12.0s: Inside ground floor atrium corridor
+      new THREE.Vector3(2.55, 3.8, 1.4),  // 13.5s: Climbing lower flight of stairs
+      new THREE.Vector3(0.5, 6.2, 2.4),   // 14.8s: Arriving at Level 2 corridor
+      new THREE.Vector3(-3.2, 6.2, 2.4),  // 15.8s: Outside open lab doorway
+      new THREE.Vector3(-5.8, 6.3, 2.2),  // 16.8s: Passing visibly through lab doorway
+      new THREE.Vector3(-8.6, 6.3, 0.4),  // 18.2s: Lingering in Chemistry Lab facing wall display
+      new THREE.Vector3(-8.6, 6.3, 0.4),  // 19.5s: Steady pause on Chemistry Lab 02 & equipment
+      new THREE.Vector3(-5.8, 6.3, 2.2),  // 20.8s: Exiting lab through doorway back to corridor
+      new THREE.Vector3(1.0, 6.4, 2.4),   // 21.8s: Central stairwell corridor
+      new THREE.Vector3(2.55, 8.4, 0.2),  // 22.8s: Climbing stairs to Level 3
+      new THREE.Vector3(3.4, 10.6, 2.4),  // 23.8s: Level 3 corridor, outside classroom doorway
+      new THREE.Vector3(5.8, 10.6, 2.2),  // 24.8s: Passing through open classroom doorway
+      new THREE.Vector3(8.6, 10.7, 0.2),  // 26.0s: Lingering in Classroom 01 facing presentation board
+      new THREE.Vector3(8.6, 10.7, 0.2),  // 27.2s: Steady pause on Classroom 01 & workstations
+      new THREE.Vector3(5.6, 10.6, 2.3),  // 28.0s: Gliding smoothly back through open classroom doorway
+      new THREE.Vector3(1.5, 10.6, 2.3),  // 28.8s: Upper atrium corridor
+      new THREE.Vector3(14, 20, 32),      // 29.5s: Ascending out into composed view
+      new THREE.Vector3(26, 32, 48),      // 30.0s: Composed final wide shot with negative space for web typography
+    ];
+
+    const lookPoints = [
+      new THREE.Vector3(0, 6, -2),        // Aerial look at NEXUS building
+      new THREE.Vector3(0, 5, -1),
+      new THREE.Vector3(0, 3, 2),
+      new THREE.Vector3(0, 2.2, 5.8),     // Facing entrance portal
+      new THREE.Vector3(0, 2.2, 5.8),     // Looking into lobby opening
+      new THREE.Vector3(0, 2.4, 0),       // Looking down atrium corridor
+      new THREE.Vector3(1.8, 3.2, 0),     // Toward stairs
+      new THREE.Vector3(2.55, 5.2, -1.0),
+      new THREE.Vector3(-3.0, 6.2, 2.2),  // Toward Level 2 corridor & lab
+      new THREE.Vector3(-6.2, 6.2, 2.2),  // Looking through lab doorway
+      new THREE.Vector3(-8.8, 6.6, -4.95),// Focused directly on Chemistry Lab wall board
+      new THREE.Vector3(-8.8, 6.6, -4.95),// Sustained focus on lab board & benches
+      new THREE.Vector3(-8.8, 6.6, -4.95),
+      new THREE.Vector3(-1.0, 6.3, 2.4),  // Looking toward corridor exit
+      new THREE.Vector3(2.55, 7.8, 0.8),  // Toward Level 3 stairs
+      new THREE.Vector3(3.2, 10.4, 1.8),  // Toward Level 3 corridor & classroom
+      new THREE.Vector3(6.2, 10.6, 2.2),  // Looking through classroom doorway
+      new THREE.Vector3(8.8, 11.2, -4.95),// Focused directly on Classroom 01 wall board
+      new THREE.Vector3(8.8, 11.2, -4.95),// Sustained focus on classroom board & desks
+      new THREE.Vector3(8.8, 11.2, -4.95),
+      new THREE.Vector3(1.5, 10.6, 0),    // Looking back toward corridor
+      new THREE.Vector3(0, 7, -1),        // Looking toward central facility
+      new THREE.Vector3(0, 6, -1.5),
+      new THREE.Vector3(0, 5, -2),        // Final composed view of connected facility
+    ];
+
+    const cameraCurve = new THREE.CatmullRomCurve3(camPoints, false, 'centripetal');
+    const lookCurve = new THREE.CatmullRomCurve3(lookPoints, false, 'centripetal');
+    const camera = new THREE.PerspectiveCamera(32, 1920 / 1080, 0.1, 500);
+
+    const TOTAL_FRAMES = 900; // 30 seconds @ 30 fps
+
+    window.renderFrame = function(frameIndex) {
+      const u = Math.min(1.0, Math.max(0.0, frameIndex / (TOTAL_FRAMES - 1)));
+      // Smooth cubic easing for pause/linger zones
+      camera.position.copy(cameraCurve.getPoint(u));
+      const look = lookCurve.getPoint(u);
+      camera.lookAt(look);
+
+      // Subtle atmospheric altitude lift
+      const lift = Math.min(1.0, Math.max(0.0, (camera.position.y - 4) / 45));
+      scene.fog.near = 12 + lift * 32;
+      scene.fog.far = 60 + lift * 120;
+
+      renderer.render(scene, camera);
+    };
+
+    async function startAutoRender() {
+      console.log('Starting automated 30s 1080p architectural render...');
+      for (let f = 0; f < TOTAL_FRAMES; f++) {
+        window.renderFrame(f);
+        const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.95));
+        await fetch('/upload_frame?f=' + f, { method: 'POST', body: blob });
+      }
+      await fetch('/done', { method: 'POST' });
+      console.log('Automated render complete!');
+    }
+
+    setTimeout(startAutoRender, 800);
+  </script>
+</body>
+</html>
